@@ -101,16 +101,6 @@ def evalute(model, loader):
         out = model(data.x, data.edge_index, data.batch)
         pred = out.max(dim=1)[1]
         total_correct += pred.eq(data.y).sum().item()
-        '''
-        print("=============")
-        print("data.x")
-        print(data.x)
-        print(out.max(dim=1))
-        print(data.y)
-        print(pred)
-        print(out)
-        print("==============")
-        '''
         loss = F.nll_loss(out, data.y)
         # crossentropy(reduce=True) for default
         total_loss += loss.item() * len(data.y)
@@ -144,8 +134,6 @@ def main():
 
         print(model)
 
-        #optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
-        #optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=True, weight_decay=args.weight_decay)
         optimizer = torch.optim.SGD([
             {'params': model.feature_extractor.parameters()},
             {'params': model.mlp.parameters(), 'lr':0.001},
