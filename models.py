@@ -46,78 +46,6 @@ class Conv1dReadout(nn.Module):
         return out
 
 
-class DownNet(nn.Module):
-    def __init__(self, in_channels, hid_channels, out_channels, ks, dropout=0.5):
-        super(DownNet, self).__init__()
-        self.in_channels = in_channels
-        self.hid_channels = hid_channels
-        self.out_channels = out_channels
-        self.pool_ratios = ks
-        self.depth = len(ks)
-        self.down_convs = torch.nn.ModuleList()
-        self.pools = torch.nn.ModuleList()
-        self.down_convs.append(GCNConv(in_channels, self.hid_channels, improved=True))
-
-        for i in range(len(ks)):
-            self.pools.append(TopKPooling(self.hid_channels, self.pool_ratios[i]))
-            self.down_convs.append(GCNConv(self.hid_channels, self.hid_channels, improved=True))
-        #in_channels = self.hid_channels
-        
-        self.convs = torch.nn.ModuleList()
-        # for i in range(len(ks)):
-        #     self.convs.append(GCNConv(in_channels, self.hid_channels, improved=True))
-        self.convs.append(GCNConv(self.hid_channels, out_channels, improved=True))
-        if dropout:
-            self.drop = torch.nn.Dropout(p=0.5)
-        else:
-            self.drop = torch.nn.Dropout(p=0.)
-        self.act = F.relu
-        self.reset_parameters()
-    
-    def reset_parameters(self):
-        for conv in self.down_convs:
-            conv.reset_parameters()
-        for pool in self.pools:
-            pool.reset_parameters()
-        for conv in self.convs:
-            conv.reset_parameters()
-
-    def forward(self, x, edge_index, batch=None):
-        """"""
-        if batch is None:
-            batch = edge_index.new_zeros(x.size(0))
-        edge_weight = x.new_ones(edge_index.size(1))
-        edge_index, edge_weight = self.augment_adj(edge_index, edge_weight, x.size(0))
-        x = self.down_convs[0](x, edge_index, edge_weight)
-        x = self.act(x)
-        x = self.drop(x)
-
-        for i in range(1, self.depth + 1):
-            edge_index, edge_weight = self.augment_adj(edge_index, edge_weight, x.size(0))
-
-            x, edge_index, edge_weight, batch, perm, _ = self.pools[i - 1](x, edge_index, edge_weight, batch)
-            x = self.down_convs[i](x, edge_index, edge_weight)
-            x = self.act(x)
-
-        # for i in range(self.depth):
-        #     x = self.convs[i](x, edge_index, edge_weight)
-        #     x = self.act(x) if i < self.depth - 1 else x
-        #     x = self.drop(x) if i < self.depth - 1 else x
-        x = self.convs[-1](x, edge_index, edge_weight)
-        return x, batch
-
-    def augment_adj(self, edge_index, edge_weight, num_nodes):
-        edge_index, edge_weight = add_self_loops(edge_index, edge_weight,
-                                                 num_nodes=num_nodes)
-        edge_index, edge_weight = sort_edge_index(edge_index, edge_weight,
-                                                  num_nodes)
-        edge_index, edge_weight = spspmm(edge_index, edge_weight, edge_index,
-                                         edge_weight, num_nodes, num_nodes,
-                                         num_nodes)
-        edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
-        return edge_index, edge_weight
-
-
 class GraphUNet(nn.Module):
     def __init__(self, in_channels, hid_channels, out_channels, ks,
         sum_res=True, dropout=0.5
@@ -168,9 +96,6 @@ class GraphUNet(nn.Module):
         if batch is None:
             batch = edge_index.new_zeros(x.size(0))
         edge_weight = x.new_ones(edge_index.size(1))
-        #edge_index, edge_weight = self.augment_adj(edge_index, edge_weight, x.size(0))
-        #print("edge_weight:", edge_weight)
-        #print("edge_index:", edge_index)
         x = self.down_convs[0](x, edge_index, edge_weight)
         #x = self.bn_layers[0](x)
         x = self.act(x)
@@ -190,16 +115,9 @@ class GraphUNet(nn.Module):
             #print("**************")
 
             x, edge_index, edge_weight, batch, perm, _ = self.pools[i - 1](x, edge_index, edge_weight, batch)
-            #print("[ITEST] pool:", i, x)
-            #print(self.down_convs[i])
-            #print("edge_index:", edge_index)
-            #print("edge_weight:", edge_weight)
             x = self.down_convs[i](x, edge_index, edge_weight)
             #x = self.bn_layers[i](x)
             x = self.act(x)
-            #print("[INFO] i:", i, x)
-            #print("x shape:", x.shape)
-            # x = self.drop(x)
 
             if i < self.depth:
                 xs += [x]
@@ -226,9 +144,6 @@ class GraphUNet(nn.Module):
         x = torch.cat([x, org_X], 1)
         #print("Step 4:", x)
         x = self.up_convs[-1](x, edge_index, edge_weight)
-        #print("[INFO] Test")
-        #print(x)
-        #exit(0)
         return x
 
     def augment_adj(self, edge_index, edge_weight, num_nodes):
@@ -261,29 +176,6 @@ class MLPClassifier(nn.Module):
         logits = self.h2_weights(h1)
         logits = F.log_softmax(logits, dim=1)
         return logits
-
-
-class DownClassifier(nn.Module):
-    def __init__(self, node_feat, nn_hid, nn_out, k, hidden, num_class):
-        super(DownClassifier, self).__init__()
-        self.feature_extractor = DownNet(
-            in_channels=node_feat,
-            hid_channels=nn_hid,
-            out_channels=nn_out,
-            ks=[0.9, 0.7, 0.6, 0.5],
-            dropout=0.3
-        )
-        self.readout = Conv1dReadout(input_dim=nn_out, k=k)
-        self.mlp = MLPClassifier(
-            input_size=self.readout.dense_dim, hidden_size=hidden,
-            num_class=num_class, with_dropout=True
-        )
-    
-    def forward(self, x, edge_index, batch):
-        gfeat, batch = self.feature_extractor(x, edge_index, batch)
-        #print(gfeat.shape)
-        vfeat = self.readout(gfeat, batch)
-        return self.mlp(vfeat)
 
 
 class Classifier(nn.Module):
